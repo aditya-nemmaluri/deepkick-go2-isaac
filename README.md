@@ -7,7 +7,7 @@
 ## 🚀 Quick Start
 
 ### Prerequisites
-* NVIDIA Isaac Lab setup on Ubuntu/GCP VM instance
+* NVIDIA Isaac Lab setup on Ubuntu VM instance
 * PyTorch & CUDA 12+
 * `rsl_rl` library installed
 
@@ -20,7 +20,7 @@ cd ~/IsaacLab
 
 ## 📈 Training Performance
 
-Trained for 1,500 iterations (~48 mins on GCP GPU):
+Trained for 1,500 iterations (~48 mins on L4 GPU):
 
 ![Go2 Kick Ball Reward Curve](assets/reward_curve_plot.jpg)
 
