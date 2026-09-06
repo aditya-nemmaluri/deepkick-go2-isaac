@@ -17,6 +17,7 @@ Run training in headless mode:
 ```bash
 cd ~/IsaacLab
 ./isaaclab.sh -p ~/deepkick-go2-isaac/scripts/train.py --num_envs 4096
+```
 
 ## 📈 Training Performance
 
@@ -26,5 +27,4 @@ Trained for 1,500 iterations (~48 mins on L4 GPU):
 
 * **Kick Velocity Reward**: Consistently scales from 0.0 to ~8.3, confirming forward ball velocity optimization.
 * **Termination Control**: Episode duration increases as base contacts (falls) drop near zero.
-```
 
