@@ -34,7 +34,7 @@ from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
 
-# 1. Scene Configuration
+# 1. Scene Configuration with Dome Light & Camera
 @configclass
 class Go2BallKickSceneCfg(InteractiveSceneCfg):
     terrain = TerrainImporterCfg(prim_path="/World/ground", terrain_type="plane", collision_group=-1)
@@ -50,25 +50,30 @@ class Go2BallKickSceneCfg(InteractiveSceneCfg):
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.6, 0.0, 0.10)),
     )
-    light = AssetBaseCfg(prim_path="/World/light", spawn=sim_utils.DistantLightCfg(intensity=3000.0))
+    # Ambient + Distant Lighting for Headless Vulkan
+    dome_light = AssetBaseCfg(
+        prim_path="/World/dome_light",
+        spawn=sim_utils.DomeLightCfg(intensity=2000.0, color=(1.0, 1.0, 1.0)),
+    )
+    distant_light = AssetBaseCfg(
+        prim_path="/World/distant_light",
+        spawn=sim_utils.DistantLightCfg(intensity=3000.0),
+    )
     camera = CameraCfg(
         prim_path="{ENV_REGEX_NS}/camera",
         update_period=0.02,
         height=720,
         width=1280,
         spawn=sim_utils.PinholeCameraCfg(),
-        offset=CameraCfg.OffsetCfg(pos=(-1.5, 0.0, 0.8), rot=(0.965, 0.0, 0.258, 0.0), convention="world"),
+        offset=CameraCfg.OffsetCfg(pos=(-1.8, 0.0, 0.9), rot=(0.965, 0.0, 0.258, 0.0), convention="world"),
     )
 
 # 2. Helper functions
 def reward_ball_forward_velocity(env: ManagerBasedRLEnv) -> torch.Tensor:
-    ball = env.scene["ball"]
-    return torch.clamp(ball.data.root_lin_vel_w[:, 0], min=0.0)
+    return torch.clamp(env.scene["ball"].data.root_lin_vel_w[:, 0], min=0.0)
 
 def reward_approach_ball(env: ManagerBasedRLEnv) -> torch.Tensor:
-    robot = env.scene["robot"]
-    ball = env.scene["ball"]
-    dist = torch.norm(ball.data.root_pos_w[:, :2] - robot.data.root_pos_w[:, :2], dim=-1)
+    dist = torch.norm(env.scene["ball"].data.root_pos_w[:, :2] - env.scene["robot"].data.root_pos_w[:, :2], dim=-1)
     return torch.exp(-2.0 * dist)
 
 def get_ball_relative_position(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -77,7 +82,7 @@ def get_ball_relative_position(env: ManagerBasedRLEnv) -> torch.Tensor:
 def is_robot_fallen(env: ManagerBasedRLEnv) -> torch.Tensor:
     return (env.scene["robot"].data.root_pos_w[:, 2] < 0.2) | (env.scene["robot"].data.root_pos_w[:, 2] > 1.2)
 
-# 3. Actions, Observations, Rewards & Terminations
+# 3. MDP Configurations
 @configclass
 class ActionsCfg:
     joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True)
@@ -106,7 +111,6 @@ class TerminationsCfg:
     time_out = DoneTerm(func=lambda env: env.episode_length_buf >= env.max_episode_length, time_out=True)
     base_contact = DoneTerm(func=is_robot_fallen)
 
-# 4. Master Environment Config
 @configclass
 class Go2BallKickEnvCfg(ManagerBasedRLEnvCfg):
     scene: Go2BallKickSceneCfg = Go2BallKickSceneCfg(num_envs=1, env_spacing=3.0)
@@ -120,7 +124,6 @@ class Go2BallKickEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
 
-# 5. Main Execution
 def main():
     print("[INFO] Initializing environment and loading RTX renderer...")
     env_cfg = Go2BallKickEnvCfg()
@@ -136,29 +139,36 @@ def main():
         "num_steps_per_env": 24, "max_iterations": 1500, "save_interval": 50, "experiment_name": "go2_ball_kick", "empirical_normalization": False
     }
 
-    log_dir = os.path.expanduser("~/IsaacLab/logs/rsl_rl/go2_ball_kick")
-    runner = OnPolicyRunner(vec_env, agent_cfg_dict, log_dir=log_dir, device="cuda:0")
-    runner.load(os.path.join(log_dir, "model_1499.pt"))
+    checkpoint_path = os.path.expanduser("~/deepkick-go2-isaac/checkpoints/model_1499.pt")
+    runner = OnPolicyRunner(vec_env, agent_cfg_dict, log_dir=os.path.dirname(checkpoint_path), device="cuda:0")
+    runner.load(checkpoint_path)
     policy = runner.get_inference_policy(device="cuda:0")
 
     obs, _ = vec_env.reset()
-    frames = []
 
+    # Camera Warmup Steps (Warms up Vulkan textures & render pipeline)
+    print("[INFO] Warming up camera buffers...")
+    for _ in range(15):
+        env.sim.render()
+        simulation_app.update()
+
+    frames = []
     print("[INFO] Rendering MP4 video frames offscreen...")
     for step in range(200):
         with torch.no_grad():
             actions = policy(obs)
         obs, _, _, _ = vec_env.step(actions)
+
+        # Force render pass update
+        env.sim.render()
         
-        # Step render pipeline explicitly
-        simulation_app.update()
-        
+        # Read RGB output tensor
         rgba = env.scene["camera"].data.output["rgb"][0].cpu().numpy()
         bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
         frames.append(bgr)
 
         if step % 50 == 0:
-            print(f"[PROGRESS] Rendered frame {step}/200...")
+            print(f"[PROGRESS] Captured frame {step}/200 (Mean Intensity: {np.mean(bgr):.1f})...")
 
     video_path = os.path.expanduser("~/go2_kick_demo.mp4")
     out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 50, (1280, 720))
