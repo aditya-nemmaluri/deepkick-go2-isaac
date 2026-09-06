@@ -1,0 +1,9 @@
+logs/
+*.pt
+*.pth
+*.usd
+*.usda
+*.usdc
+__pycache__/
+.vscode/
+.idea/
